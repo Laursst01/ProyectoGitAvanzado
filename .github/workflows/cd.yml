@@ -1,0 +1,85 @@
+
+name: CD - Despliegue Continuo
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    name: Incrementar version en README
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 2
+          token: ${{ secrets.OWNER_TOKEN }}
+
+      - name: Incrementar version
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          SUBJECT="${COMMIT_MSG%%$'\n'*}"
+
+          if [[ "$SUBJECT" =~ ^Merge\ pull\ request\ \#[0-9]+\ from\ [^/]+/develop$ ]] || [[ "$SUBJECT" =~ ^Merge\ branch\ \'develop\' ]]; then
+            echo "Se ha integrado develop en main."
+          else
+            echo "No es un merge de develop. No se incrementa la version."
+            exit 0
+          fi
+
+          LAST=$(grep -oE 'AppVersion-[0-9]+' README.md | tail -1 | cut -d- -f2)
+
+          if [[ -z "$LAST" ]]; then
+            echo "ERROR: No se encontro AppVersion-0."
+            exit 1
+          fi
+
+          NEXT=$((LAST + 1))
+          FECHA=$(date -u '+%d/%m/%Y %H:%M UTC')
+
+          printf '\nAppVersion-%s - %s\n' "$NEXT" "$FECHA" >> README.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add README.md
+          git commit -m "docs: bump de version"
+          git push origin HEAD:main
+
+  validate-prod:
+    name: Validar PROD_TOKEN
+    needs: bump-version
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Comparar tokens de produccion
+        shell: powershell
+        env:
+          TOKEN: ${{ secrets.PROD_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TOKEN)) {
+            throw "No se ha encontrado PROD_TOKEN."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:LOCAL_PROD_TOKEN)) {
+            throw "No se ha encontrado LOCAL_PROD_TOKEN."
+          }
+
+          if ($env:TOKEN -cne $env:LOCAL_PROD_TOKEN) {
+            throw "ERROR: PROD_TOKEN y LOCAL_PROD_TOKEN no coinciden."
+          }
+
+          Write-Host "CORRECTO: los tokens de produccion coinciden."
