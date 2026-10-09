@@ -1,0 +1,79 @@
+
+name: CI - Integracion Continua
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop]
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    name: Registrar feature en README
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 2
+
+      - name: Registrar feature
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ "$COMMIT_MSG" =~ Merge\ pull\ request\ \#[0-9]+\ from\ [^/]+/(feature/.+) ]]; then
+            FEATURE="${BASH_REMATCH[1]}"
+          else
+            echo "No se ha detectado una nueva feature."
+            exit 0
+          fi
+
+          LINEA="- Añadida feature: $FEATURE"
+
+          if grep -Fxq -- "$LINEA" README.md; then
+            echo "La feature ya estaba registrada."
+            exit 0
+          fi
+
+          echo "$LINEA" >> README.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add README.md
+          git commit -m "docs: registrar feature"
+          git push origin HEAD:develop
+
+  validate-dev:
+    name: Validar DEV_TOKEN
+    needs: update-readme
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Comparar tokens de desarrollo
+        shell: powershell
+        env:
+          TOKEN: ${{ secrets.DEV_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TOKEN)) {
+            throw "No se ha encontrado DEV_TOKEN."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:LOCAL_DEV_TOKEN)) {
+            throw "No se ha encontrado LOCAL_DEV_TOKEN."
+          }
+
+          if ($env:TOKEN -cne $env:LOCAL_DEV_TOKEN) {
+            throw "ERROR: DEV_TOKEN y LOCAL_DEV_TOKEN no coinciden."
+          }
+
+          Write-Host "CORRECTO: los tokens de desarrollo coinciden."
